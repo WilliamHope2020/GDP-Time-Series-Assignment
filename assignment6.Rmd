@@ -1,0 +1,249 @@
+---
+title: "assignment 6"
+output: pdf_document
+date: "2023-03-01"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(stargazer)
+library(nlme)
+library(tseries)
+library(sandwich)
+library(lmtest)
+```
+
+# Setup 
+```{r}
+set.seed(20885971)
+country <- c("Austria","Belgium","Canada","Denmark","Finland","France",
+"Germany","Ireland","Italy","Japan","Netherlands","Spain",
+"Sweden","Switzerland","UK","US")
+mycountry <- sample(country,1)
+mycountry
+
+dat <- read.csv("GermanyData61_98.csv", header=TRUE)
+dat <- ts(dat, start=c(1960,1), frequency=4)
+
+# Lagged Regression
+# fit <- lm(inf~inf_1, dat)
+
+# Note to self:
+## SR = Interest Rate in this dataset, referred to as Rt
+## inf = inflation rate, referred to as (pi)t
+## trend, HP and/or BP is the Detrended real GDP, referred to as Yt
+
+```
+
+# Question 1
+```{r}
+SR <- dat[,"SR"]
+SR <- ts(SR, start=c(1960,1), frequency=4)
+inf <- dat[,"inf"]
+inf <- ts(inf, start=c(1960,1), frequency=4)
+HP <- dat[,"HP"]
+HP <- ts(HP, start=c(1960,1), frequency=4)
+
+fit <- lm(SR~inf+HP, dat, na.action=na.exclude)
+summary(fit)
+
+plot(SR, main="SR Time Series", col='blue', lwd=2)
+plot(inf, main="inf Time Series", col='red', lwd=2)
+plot(HP, main="HP Time Series", col='red', lwd=2)
+
+
+acf(SR, lag.max=50, main="ACF for SR Time Series")
+acf(inf, lag.max=50, main="ACF for inf Time Series")
+acf(HP, lag.max=50, main="ACF for HP Time Series")
+
+adf.test(SR)
+adf.test(inf)
+adf.test(HP)
+
+dwtest(fit)
+bgtest(fit, order=1)
+bgtest(fit, order=2)
+bgtest(fit, order=3)
+
+library(sandwich)
+knitr::kable(coeftest(fit, vcov=vcovHAC)[,])
+
+res <- residuals(fit)
+acf(res, main="ACF of Residuals")
+```
+
+Firstly we can see that with the HAC estimator, inf is significant, but HP is not. After running other tests it is clear that the regression is stationary. When we plot the ACF of the residuals, it is clear that it is persistent. This makes sense because all of the variables are persistent and when using the Augmented Dickey-Fuller Test for all the variables, all of them are non-stationary, except HP. There appears to be a contradiction when running the tests.
+
+# Question 2
+```{r}
+fit2 <- gls(SR~inf+HP, dat, correlation=corARMA(p=1))
+
+stargazer(fit, fit2, header=FALSE, float=FALSE, type='text')
+
+summary(fit2$modelStruc)
+
+yhat <- ts(predict(fit2), start=1960) + 0.962689*lag(ts(residuals(fit2), start=1960),-1)
+yhat2 <- ts(predict(fit), start=1948)
+plot(SR, main="Predicted Inflation", type="l")
+lines(yhat2, col=5, lwd=2, lty=2)
+lines(yhat, col=6, lwd=2, lty=2)
+legend("topright", c("GLS","OLS"), col=5:6, lty=2, lwd=2, bty='n')
+
+```
+
+The estimate is very high, which means GLS is much better in case of serial correlation than OLS for prediction. 
+When we use GLS and compare it to OLS in the chart, it gives a slightly better prediction of the interest rate. 
+
+# Question 3
+```{r}
+d_SR <- diff(SR)
+d_inf <- diff(inf)
+d_HP <- diff(HP)
+
+fit3_OLS <- lm(d_SR~d_inf+d_HP, dat)
+fit3_GLS <- gls(d_SR~d_inf+d_HP, dat, correlation=corARMA(p=1))
+knitr::kable(coeftest(fit3_OLS, vcov=vcovHAC)[,])
+summary(fit3_GLS)
+
+summary(fit3_GLS$modelStruc)
+
+res_OLS <- residuals(fit3_OLS)
+acf(res_OLS, main="ACF of Residuals for OLS Approach")
+
+res_GLS <- residuals(fit3_GLS)
+acf(res_GLS, main="ACF of Residuals for GLS Approach")
+```
+
+Both OLS and GLS for this model are weakly persistent, much better than question 1. Only the first difference of HP is significant. 
+
+# Question 4
+```{r}
+inf_1 <- dat[,"inf_1"]
+inf_1 <- ts(inf_1, start=c(1960,1), frequency=4)
+
+inf_2 <- dat[,"inf_2"]
+inf_2 <- ts(inf_2, start=c(1960,1), frequency=4)
+
+inf_3 <- dat[,"inf_3"]
+inf_3 <- ts(inf_3, start=c(1960,1), frequency=4)
+
+d_inf_1 <- diff(inf_1)
+d_inf_2 <- diff(inf_2)
+d_inf_3 <- diff(inf_3)
+
+fit4_OLS <- lm(d_SR~d_inf+d_inf_1+d_inf_2+d_inf_3+d_HP, dat)
+fit4_GLS <- gls(d_SR~d_inf+d_inf_1+d_inf_2+d_inf_3+d_HP, dat, correlation=corARMA(p=1))
+knitr::kable(coeftest(fit4_OLS, vcov=vcovHAC)[,])
+summary(fit4_GLS)
+
+res2_OLS <- residuals(fit4_OLS)
+acf(res2_OLS, main="ACF of Residuals for OLS Approach")
+
+res2_GLS <- residuals(fit4_GLS)
+acf(res2_GLS, main="ACF of Residuals for GLS Approach")
+
+```
+When we add the lags, all the variables are strongly significant with the GLS function and with OLS. With GLS, the first difference is about 0.06. The lags reveal that after one period, the interest rate increases by 8%, after 2 periods it increases by 6.7%, and after periods/lags, it increases by 6.8%.
+
+With the OLS approach, we can see that there are slight differences, but all variables increase interest rate. Therefore, with either OLS or GLS, the long-term effect on interest rate increases. 
+
+## Question 4b
+```{r}
+CIcum <- function(fit4_OLS, l, HAC="false")
+{
+  v <- if(HAC) vcovHAC(fit4_OLS) else vcov(fit4_OLS)
+  ans <- sapply(l, function(li) {
+  b <- coef(fit4_OLS)
+  R <- rep(0,length(b))
+  R[2:(2+li)] <- 1
+  se <- sqrt(c(t(R)%*%v%*%R))
+  est <- sum(b[-1][1:(li+1)])
+  q <- qnorm(.975)
+  c(est-q*se, est+q*se, est)
+  })
+dimnames(ans) <- list(c("Lower","Upper","Estim"), l)
+  t(ans)
+}
+res <- CIcum(fit4_OLS, 0:3)
+matplot(0:3, res, col=c(2,2,1), type=c("l","l","b"),xlab="lag", ylab="Cum",
+
+lty=c(2,2,1), lwd=3, main="Cumulative Effect (M1 on Inflation)",
+pch=c(NA,NA,21))
+abline(h=0)
+grid()
+
+```
+
+As previously mentioned, when we plot the graph, it appears just as the table suggests, there is a long-term increasing effect on interest rate when we account for lags of inflation rate.
+
+# Question 5
+```{r}
+SR_1 <- dat[,"SR_1"]
+SR_1 <- ts(SR_1, start=c(1960,1), frequency=4)
+
+SR_2 <- dat[,"SR_2"]
+SR_2 <- ts(SR_2, start=c(1960,1), frequency=4)
+
+d_SR_1 <- diff(SR_1)
+d_SR_2 <- diff(SR_2)
+
+fit5 <- lm(d_SR~d_SR_1+d_SR_2+d_inf+d_inf_1+d_inf_2+d_inf_3+d_HP, dat)
+knitr::kable(coeftest(fit5, vcov=vcovHAC)[,])
+
+res3 <- residuals(fit5)
+acf(res3, main="ACF of Residuals")
+
+plot(d_SR, main="d_SR Time Series", col='blue', lwd=2)
+plot(d_SR_1, main="d_SR_1 Time Series", col='red', lwd=2)
+plot(d_SR_2, main="d_SR_2 Time Series", col='red', lwd=2)
+plot(d_inf, main="d_inf Time Series", col='blue', lwd=2)
+plot(d_inf_1, main="d_inf_1 Time Series", col='red', lwd=2)
+plot(d_inf_2, main="d_inf_2 Time Series", col='red', lwd=2)
+plot(d_inf_3, main="d_inf_3 Time Series", col='blue', lwd=2)
+plot(d_HP, main="d_HP Time Series", col='red', lwd=2)
+
+acf(d_SR, lag.max=50, main="ACF for d_SR Time Series")
+acf(d_SR_1, lag.max=50, main="ACF for d_SR_1 Time Series")
+acf(d_SR_2, lag.max=50, main="ACF for d_SR_2 Time Series")
+acf(d_inf, lag.max=50, main="ACF for d_inf Time Series")
+acf(d_inf_1, lag.max=50, main="ACF for d_inf_1 Time Series")
+acf(d_inf_2, lag.max=50, main="ACF for d_inf_2 Time Series")
+acf(d_inf_3, lag.max=50, main="ACF for d_inf_3 Time Series")
+acf(d_HP, lag.max=50, main="ACF for d_HP Time Series")
+
+adf.test(d_SR)
+adf.test(d_SR_1)
+adf.test(d_SR_2)
+adf.test(d_inf)
+adf.test(d_inf_1)
+adf.test(d_inf_2)
+adf.test(d_inf_3)
+adf.test(d_HP)
+```
+
+Testing for serial correlation is always best practice, but in this specific case, it's mandatory because we need to see if the past data/lags are correlated with the current data.
+
+## Question 5b
+```{r}
+b <- coef(fit5)
+new_inf <- d_inf / (1-b[2]-b[3])
+new_inf_1 <- d_inf_1 / (1-b[2]-b[3])
+new_inf_2 <- d_inf_2 / (1-b[2]-b[3])
+new_inf_3 <- d_inf_3 / (1-b[2]-b[3])
+new_HP <- d_HP / (1-b[2]-b[3])
+
+fit6 <- lm(d_SR~d_SR_1+d_SR_2+new_inf+new_inf_1+new_inf_2+new_inf_3+new_HP, dat)
+stargazer(fit5, fit6, header=FALSE, float=FALSE, type = "text")
+
+res3 <- residuals(fit5)
+acf(res3, main="ACF of Residuals")
+
+res4 <- residuals(fit6)
+acf(res4, main="ACF of Residuals")
+
+
+```
+
+The coefficients are about half as less in the new model when we divide each coefficient of inflation and GDP by $(1-\beta_2-\beta_3)$. We apply this to the variables because we reduce serial correlation. When we add lags of the interest rate, it reduces serial correlation because we account for the past interest rates instead of the current interest rate. In addition, we can gain a better understanding of the long term effect of interest rate on GDP and interest rate.
+
+
